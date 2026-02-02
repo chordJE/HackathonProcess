@@ -2,8 +2,14 @@
 Streamlit 앱: ScoreBoard(전면) + Summit Check(사이드).
 제출 시 자동 ML 채점 수행.
 """
+from pathlib import Path
+
 import streamlit as st
 from scoring import run_scoring, load_scoreboard, load_recent_submissions
+
+# save_db.csv 경로 (다운로드용)
+SAVE_DB_PATH = Path(__file__).resolve().parent / "save_db.csv"
+DB_DOWNLOAD_PASSWORD = "7496"
 
 # 페이지 설정
 st.set_page_config(
@@ -133,3 +139,21 @@ with st.expander("채점 상세 내역"):
             st.markdown(f"**{r['team']} · {r['case']}** — {r['score']}점 ({r['submitted_at']})")
     else:
         st.caption("최근 채점 내역 없음.")
+
+# 스코어보드 맨 아래: 비밀번호 입력 시 save_db.csv 다운로드
+st.divider()
+pw = st.text_input("비밀번호", type="password", key="db_download_pw", placeholder="비밀번호 입력")
+if pw == DB_DOWNLOAD_PASSWORD:
+    if SAVE_DB_PATH.exists():
+        db_content = SAVE_DB_PATH.read_text(encoding="utf-8")
+        st.download_button(
+            "save_db.csv 다운로드",
+            data=db_content,
+            file_name="save_db.csv",
+            mime="text/csv",
+            key="download_save_db",
+        )
+    else:
+        st.caption("save_db.csv 파일이 아직 없습니다.")
+elif pw and pw != DB_DOWNLOAD_PASSWORD:
+    st.caption("비밀번호가 일치하지 않습니다.")

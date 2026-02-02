@@ -3,7 +3,7 @@ Streamlit 앱: ScoreBoard(전면) + Summit Check(사이드).
 제출 시 자동 ML 채점 수행.
 """
 import streamlit as st
-from scoring import run_scoring, load_scoreboard
+from scoring import run_scoring, load_scoreboard, load_recent_submissions
 
 # 페이지 설정
 st.set_page_config(
@@ -125,11 +125,11 @@ with col3:
     st.subheader("Case3")
     render_score_cards("case3")
 
-# 상세 결과 접기 영역 (선택)
+# 채점 상세 내역: 최근 업데이트된 채점 결과 10건만 표시
 with st.expander("채점 상세 내역"):
-    if st.session_state.scoreboard:
-        for (team_id, case), data in sorted(st.session_state.scoreboard.items()):
-            st.markdown(f"**{team_id}팀 · {case}** — {data['score']}점")
-            st.caption(data.get("details", ""))
+    recent = load_recent_submissions(limit=10)
+    if recent:
+        for r in recent:
+            st.markdown(f"**{r['team']} · {r['case']}** — {r['score']}점 ({r['submitted_at']})")
     else:
-        st.caption("상세 내역 없음.")
+        st.caption("최근 채점 내역 없음.")

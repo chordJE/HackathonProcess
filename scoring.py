@@ -1,7 +1,10 @@
 """
 머신러닝 채점 모듈.
 제출 CSV의 predict 컬럼과 정답 파일(case2_answer.csv / case3_answer.csv)의 answer 컬럼을
-sklearn accuracy_score로 비교하여 채점하고, 결과를 save_score.csv에 저장합니다.
+sklearn accuracy_score로 비교하여 채점합니다.
+- save_score.csv: 팀·케이스별 최고점 (스코어보드용)
+- score_recent.csv: 최근 10건 (채점 상세 내역용)
+- save_db.csv: 모든 제출 기록·점수 (저장용, 스코어보드와 무관)
 """
 from pathlib import Path
 from typing import Literal
@@ -15,6 +18,9 @@ from sklearn.metrics import accuracy_score
 BASE_DIR = Path(__file__).resolve().parent
 ANSWER_FILES = {"case2": BASE_DIR / "case2_answer.csv", "case3": BASE_DIR / "case3_answer.csv"}
 SAVE_SCORE_PATH = BASE_DIR / "save_score.csv"
+RECENT_SCORE_PATH = BASE_DIR / "score_recent.csv"  # 최근 채점 결과 10건 (채점 상세 내역용)
+SAVE_DB_PATH = BASE_DIR / "save_db.csv"  # 모든 제출 기록·점수 저장용 (스코어보드와 무관)
+MAX_RECENT = 10
 
 
 def run_scoring(
@@ -81,8 +87,12 @@ def run_scoring(
         score_100 = round(acc * 100.0, 2)
         submitted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # save_score.csv 갱신
+        # save_score.csv: 해당 팀·케이스의 최고점만 갱신
         _save_score(team_id=team_id, case=case, score=score_100, submitted_at=submitted_at)
+        # 최근 채점 결과 10건 로그 (채점 상세 내역용)
+        _append_recent(team_id=team_id, case=case, score=score_100, submitted_at=submitted_at)
+        # save_db.csv: 모든 제출 기록·점수 저장 (스코어보드와 무관)
+        _append_save_db(team_id=team_id, case=case, score=score_100, submitted_at=submitted_at)
 
         return {
             "score": score_100,
@@ -97,12 +107,22 @@ def run_scoring(
         }
 
 
+def _parse_score_from_cell(cell) -> float:
+    """셀 값 "85.5(2025-02-03 14:30:00)" 에서 점수만 추출. 없으면 -1."""
+    if pd.isna(cell) or str(cell).strip() == "":
+        return -1.0
+    s = str(cell).strip()
+    score_str = s.split("(")[0].strip() if "(" in s else s
+    try:
+        return float(score_str)
+    except ValueError:
+        return -1.0
+
+
 def _save_score(team_id: int, case: str, score: float, submitted_at: str) -> None:
     """
-    save_score.csv에 팀별로 해당 case 컬럼만 갱신합니다.
-    - case2 제출 → case2 컬럼에만 저장
-    - case3 제출 → case3 컬럼에만 저장
-    컬럼: team, case2, case3 (각 셀은 "점수(제출시각)" 형식).
+    save_score.csv에 팀별·케이스별 '최고점'만 갱신합니다.
+    새 점수가 기존 점수보다 클 때만 저장합니다.
     """
     value = f"{score}({submitted_at})"
     cols = ["team", "case2", "case3"]
@@ -123,7 +143,9 @@ def _save_score(team_id: int, case: str, score: float, submitted_at: str) -> Non
 
     if mask.any():
         idx = df.loc[mask].index[0]
-        df.at[idx, case] = value  # 선택한 case 컬럼에만 기록
+        current_score = _parse_score_from_cell(df.at[idx, case])
+        if score > current_score:
+            df.at[idx, case] = value
     else:
         new_row = {"team": team_label, "case2": "", "case3": ""}
         new_row[case] = value
@@ -132,9 +154,49 @@ def _save_score(team_id: int, case: str, score: float, submitted_at: str) -> Non
     df[cols].to_csv(SAVE_SCORE_PATH, index=False)
 
 
+def _append_recent(team_id: int, case: str, score: float, submitted_at: str) -> None:
+    """최근 채점 결과를 score_recent.csv에 추가하고, 최대 10건만 유지합니다."""
+    cols = ["team", "case", "score", "submitted_at"]
+    new_row = pd.DataFrame([{"team": f"{team_id}팀", "case": case, "score": score, "submitted_at": submitted_at}])
+
+    if RECENT_SCORE_PATH.exists():
+        try:
+            df = pd.read_csv(RECENT_SCORE_PATH)
+            if not all(c in df.columns for c in cols):
+                df = pd.DataFrame(columns=cols)
+        except Exception:
+            df = pd.DataFrame(columns=cols)
+    else:
+        df = pd.DataFrame(columns=cols)
+
+    df = pd.concat([df, new_row], ignore_index=True)
+    df = df.tail(MAX_RECENT)
+    df[cols].to_csv(RECENT_SCORE_PATH, index=False)
+
+
+def _append_save_db(team_id: int, case: str, score: float, submitted_at: str) -> None:
+    """모든 제출 기록·점수를 save_db.csv에 추가합니다. 스코어보드와 연동되지 않는 저장용."""
+    cols = ["team", "case", "score", "submitted_at"]
+    new_row = pd.DataFrame([{"team": f"{team_id}팀", "case": case, "score": score, "submitted_at": submitted_at}])
+
+    if SAVE_DB_PATH.exists():
+        try:
+            df = pd.read_csv(SAVE_DB_PATH)
+            if not all(c in df.columns for c in cols):
+                df = pd.DataFrame(columns=cols)
+        except Exception:
+            df = pd.DataFrame(columns=cols)
+    else:
+        df = pd.DataFrame(columns=cols)
+
+    df = pd.concat([df, new_row], ignore_index=True)
+    df[cols].to_csv(SAVE_DB_PATH, index=False)
+
+
 def load_scoreboard() -> dict:
     """
     save_score.csv를 읽어서 scoreboard 형태로 반환합니다.
+    (각 팀·케이스별 최고점만 저장되어 있음)
     Returns: {(team_id, case): {"score": float, "details": str}}
     """
     board = {}
@@ -156,20 +218,34 @@ def load_scoreboard() -> dict:
                 cell = row.get(case, "")
                 if pd.isna(cell) or str(cell).strip() == "":
                     continue
-                # "85.5(2025-02-03 14:30:00)" 형태에서 점수만 추출
                 s = str(cell).strip()
-                if "(" in s:
-                    score_str = s.split("(")[0].strip()
-                else:
-                    score_str = s
-                try:
-                    score = float(score_str)
-                except ValueError:
+                score = _parse_score_from_cell(cell)
+                if score < 0:
                     continue
                 board[(team_id, case)] = {
                     "score": score,
-                    "details": f"제출 기록: {s}",
+                    "details": f"최고점 기록: {s}",
                 }
     except Exception:
         pass
     return board
+
+
+def load_recent_submissions(limit: int = MAX_RECENT) -> list:
+    """
+    최근 채점 결과를 최대 limit건 반환합니다 (최신순).
+    Returns: [{"team": "1팀", "case": "case2", "score": 85.5, "submitted_at": "..."}, ...]
+    """
+    if not RECENT_SCORE_PATH.exists():
+        return []
+    try:
+        df = pd.read_csv(RECENT_SCORE_PATH)
+        cols = ["team", "case", "score", "submitted_at"]
+        if not all(c in df.columns for c in cols):
+            return []
+        df = df[cols].dropna(how="all")
+        # 최신순 (마지막 행이 최신)
+        df = df.tail(limit).iloc[::-1].reset_index(drop=True)
+        return df.to_dict("records")
+    except Exception:
+        return []
